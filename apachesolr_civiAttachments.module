@@ -127,11 +127,18 @@ WHERE      f.id = %1
   // the apachesolr_file.module had a much simpler implementation of this
   // and hence is used here
   // FIXME: Need to check who sends the file object here and how
-  $document->uid = $file->uid;
-  $document->label = apachesolr_clean_text($file->filename);
-  $document->created = $file->timestamp;
-  $document->bundle = $file->type;
-  $document->bundle_name = $file->type;
+  $document->uid = $dao->file_id;
+  $document->label = apachesolr_clean_text(CRM_Utils_File::cleanFileName($dao->uri));
+  $document->url   = CRM_Utils_System::url(
+    'civicrm/file',
+    "reset=1&id={$dao->file_id}&eid={$dao->entity_id}",
+    FALSE,
+    NULL,
+    FALSE
+  );
+  $document->created = strtotime($dao->upload_date);
+  $document->bundle = 'civiFile';
+  $document->bundle_name = 'civiFile';
 
   $env_id = apachesolr_default_environment();
   $document->content = apachesolr_clean_text($text);
@@ -194,7 +201,7 @@ INNER JOIN civicrm_entity_file ef ON f.id = ef.file_id
  */
 function _apachesolr_civiAttachments_get_parent_info($file) {
   // FIXME - implement this soon
-  return array( $file->entity_table, rand(1, 10000));
+  return array($file->entity_table, 45);
 }
 
 /**

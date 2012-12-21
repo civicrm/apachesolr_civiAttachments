@@ -9,6 +9,7 @@
  * Implements hook_enable().
  */
 function apachesolr_civiAttachments_enable() {
+  db_query("UPDATE {system} SET weight = 100 WHERE name = 'apachesolr_civicrmAttachments'");
 }
 
 /**
