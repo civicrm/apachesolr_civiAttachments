@@ -1,0 +1,283 @@
+<?php
+
+/**
+ * @file
+ * Provides a file attachment search implementation for use with the Apache Solr module
+ */
+
+define('EXTRACTING_SERVLET', 'extract/tika');
+/**
+ * Initialize civicrm here
+ */
+function apachesolr_civiAttachments_initialize() {
+  if (!civicrm_initialize()) {
+    die('could not initialize CiviCRM');
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function apachesolr_civiAttachments_menu() {
+  $items = array();
+  $items['admin/config/search/apachesolr/civiAttachments'] = array(
+    'title' => 'Attachments',
+    'description' => 'Administer Apache Solr Attachments.',
+    'page callback' => 'apachesolr_civiAttachments_admin_page',
+    'access arguments' => array('administer search'),
+    'file' => 'apachesolr_civiAttachments.admin.inc',
+    'type' => MENU_LOCAL_TASK,
+  );
+  $items['admin/config/search/apachesolr/civiAttachments/test'] = array(
+    'title' => 'Test tika extraction',
+    'page callback' => 'apachesolr_civiAttachments_test_tika_extraction',
+    'access arguments' => array('administer search'),
+    'file' => 'apachesolr_civiAttachments.admin.inc',
+    'type' => MENU_CALLBACK,
+  );
+  $items['admin/config/search/apachesolr/civiAttachments/confirm/delete'] = array(
+    'title' => 'Delete and reindex all files',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('apachesolr_civiAttachments_confirm', 6),
+    'access arguments' => array('administer search'),
+    'file' => 'apachesolr_civiAttachments.admin.inc',
+    'type' => MENU_CALLBACK,
+  );
+  $items['admin/config/search/apachesolr/civiAttachments/confirm/clear-cache'] = array(
+    'title' => 'Delete the local cache of file text',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('apachesolr_civiAttachments_confirm', 6),
+    'access arguments' => array('administer search'),
+    'file' => 'apachesolr_civiAttachments.admin.inc',
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+function apachesolr_civiAttachments_entity_info() {
+  return array(
+    'civiFile' => array(
+      'label'        => t('CiviCRM File Attachments'),
+      'base table'   => 'apachesolr_index_entities_civiFile',
+      'fieldable'    => FALSE,
+      'static cache' => FALSE,
+      'entity keys'  => array('id' => 'entity_id'),
+      'bundles'      => array(),
+      'view modes'   => array(),
+    )
+  );
+}
+
+/**
+ * @file
+ *   Indexer for the userhook_apachesolr_entity_info_alter entities for the Apachesolr module.
+ */
+function apachesolr_civiAttachments_apachesolr_entity_info_alter(&$entity_info) {
+  $entity_info['civiFile']['indexable'] = TRUE;
+  $entity_info['civiFile']['status callback'][] = 'apachesolr_civiAttachments_status_callback';
+  $entity_info['civiFile']['document callback'][] = 'apachesolr_civiAttachments_solr_document';
+  $entity_info['civiFile']['reindex callback'] = 'apachesolr_civiAttachments_solr_reindex';
+  $entity_info['civiFile']['index_table'] = 'apachesolr_index_entities_civiFile';
+  $entity_info['civiFile']['result callback'] = 'apachesolr_civiAttachments_file_result';
+}
+
+/**
+ * Builds the file-specific information for a Solr document.
+ *
+ * @param ApacheSolrDocument $document
+ *   The Solr document we are building up.
+ * @param stdClass $entity
+ *   The entity we are indexing.
+ * @param string $entity_type
+ *   The type of entity we're dealing with.
+ */
+function apachesolr_civiAttachments_solr_document(ApacheSolrDocument $document, $file, $entity_type, $env_id) {
+  module_load_include('inc', 'apachesolr_civiAttachments', 'apachesolr_civiAttachments.index');
+  $documents = array();
+  $table = apachesolr_get_indexer_table('civiFile');
+  apachesolr_civiAttachments_initialize();
+
+  $sql = "
+SELECT     f.*, ef.*, ef.id as entity_file_id
+FROM       civicrm_file f
+INNER JOIN civicrm_entity_file ef ON f.id = ef.file_id
+WHERE      f.id = %1
+";
+  $dao = CRM_Core_DAO::executeQuery(
+    $sql,
+    array(1 => array($file->entity_id, 'Integer'))
+  );
+
+  if (!$dao->fetch()) {
+    return $documents;
+  }
+
+  $config = CRM_Core_Config::singleton();
+  $dao->path = $config->customFileUploadDir . $dao->uri;
+
+  // Text is saved in the index table. Will be used by the node indexing if
+  // available.
+  $text = apachesolr_civiAttachments_get_attachment_text($dao);
+  // If we don't have extracted text we should stop our process here
+
+  if (empty($text)) {
+    return $documents;
+  }
+
+  // the apachesolr_file.module had a much simpler implementation of this
+  // and hence is used here
+  // FIXME: Need to check who sends the file object here and how
+  $document->uid = $file->uid;
+  $document->label = apachesolr_clean_text($file->filename);
+  $document->created = $file->timestamp;
+  $document->bundle = $file->type;
+  $document->bundle_name = $file->type;
+
+  $env_id = apachesolr_default_environment();
+  $document->content = apachesolr_clean_text($text);
+
+  $documents[] = $document;
+  return $documents;
+}
+
+/**
+ * Reindexing callback for ApacheSolr, for file entities.
+ */
+function apachesolr_civiAttachments_solr_reindex() {
+  module_load_include('inc', 'apachesolr_civiAttachments', 'apachesolr_civiAttachments.index');
+  $indexer_table = apachesolr_get_indexer_table('civiFile');
+  $transaction = db_transaction();
+  $env_id = apachesolr_default_environment();
+  try {
+    // Clean the table
+    db_delete($indexer_table)
+      ->condition('entity_type', 'civiFile')
+      ->isNull('body')
+      ->execute();
+    $fileDAO = _apachesolr_civiAttachments_get_all_files();
+
+    // Loop over all the files and add them to our indexing table
+    while ($fileDAO->fetch()) {
+      list ($parent_entity_type, $parent_entity_id) = _apachesolr_civiAttachments_get_parent_info($fileDAO);
+      apachesolr_civiAttachments_add_file_usage($fileDAO, $parent_entity_type, $parent_entity_id);
+    }
+  }
+  catch (Exception $e) {
+    $transaction->rollback();
+    drupal_set_message($e->getMessage(), 'error');
+    watchdog_exception('Apache Solr Attachments', $e);
+    return FALSE;
+  }
+  return TRUE;
+}
+
+/**
+ * Fetches all files linked to nodes created by fields from the file module
+ * regardless of the widget
+ * @return type
+ */
+function _apachesolr_civiAttachments_get_all_files() {
+  apachesolr_civiAttachments_initialize();
+
+  $sql = "
+SELECT     f.*, ef.*, ef.id as entity_file_id
+FROM       civicrm_file f
+INNER JOIN civicrm_entity_file ef ON f.id = ef.file_id
+";
+  return CRM_Core_DAO::executeQuery($sql);
+}
+
+/**
+ * Fetches parent info for this file, so we can print a few pretty statements
+ * and useful links about where this file is linked to
+ *
+ */
+function _apachesolr_civiAttachments_get_parent_info($file) {
+  // FIXME - implement this soon
+  return array( $file->entity_table, rand(1, 10000));
+}
+
+/**
+ * Status callback for the files. Files should never be removed from the table.
+ *
+ * @param type $entity_id
+ * @param type $entity_type
+ * @return type
+ */
+function apachesolr_civiAttachments_status_callback($entity_id, $entity_type) {
+  module_load_include('inc', 'apachesolr_civiAttachments', 'apachesolr_civiAttachments.index');
+
+  apachesolr_civiAttachments_initialize();
+
+  // get the file from the file table
+  $sql = "
+SELECT *
+FROM   civicrm_file
+WHERE  id = %1
+";
+  $params = array( 1 => array( $entity_id, 'Integer' ));
+  $dao = CRM_Core_DAO::executeQuery($sql, $params);
+  if (! $dao->fetch()) {
+    return FALSE;
+  }
+
+  // Check if the mimetype is allowed
+  if (apachesolr_civiAttachments_allowed_mime($dao->mime_type) == FALSE && 0) {
+    // Set status to 0 and remove from the index
+    return FALSE;
+  }
+
+  $config = CRM_Core_Config::singleton();
+
+  // Check if the file is a real file
+  if (apachesolr_civiAttachments_is_file($config->customFileUploadDir . $dao->uri) == FALSE) {
+    // Set status to 0 and remove from the index
+    return FALSE;
+  }
+
+  // Keep status at 1
+  return TRUE;
+}
+
+function apachesolr_civiAttachments_is_file($filepath) {
+  // Check that we have a valid filepath.
+  if (!$filepath) {
+    return FALSE;
+  }
+  elseif (!is_file($filepath)) {
+    watchdog('Apache Solr Attachments', '%filepath is not a valid file path', array('%filepath' => $entity->uri), WATCHDOG_WARNING);
+    return FALSE;
+  }
+  return TRUE;
+}
+
+/**
+ * Callback function for file search results.
+ *
+ * @param stdClass $doc
+ *   The result document from Apache Solr.
+ * @param array $result
+ *   The result array for this record to which to add.
+ */
+function apachesolr_civiAttachments_file_result($doc, &$result, &$extra) {
+  $doc->uid = $doc->is_uid;
+  $result += array(
+    'type' => t('File attachment'),
+    'user' => theme('username', array('account' => $doc)),
+    'date' => isset($doc->created) ? $doc->created : 0,
+    'node' => $doc,
+    'file' => $doc,
+    'uid' => $doc->is_uid,
+  );
+}
+
+/**
+ * Provides a default list of filename extensions to exclude from the index.
+ *
+ * @return
+ *   An array of file extensions.
+ */
+function apachesolr_civiAttachments_default_excluded() {
+  $default = array('aif', 'art', 'avi', 'bmp', 'gif', 'ico', 'jpg', 'mov', 'mp3', 'mp4', 'mpg', 'oga', 'ogv', 'png', 'psd', 'ra', 'ram', 'rgb', 'tif', 'wmv');
+  return $default;
+}
