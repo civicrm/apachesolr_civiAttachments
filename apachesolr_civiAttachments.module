@@ -5,7 +5,7 @@
  * Provides a file attachment search implementation for use with the Apache Solr module
  */
 
-define('EXTRACTING_SERVLET', 'extract/tika');
+define('APACHESOLR_CIVIATTACHMENTS_EXTRACTING_SERVLET', 'extract/tika');
 /**
  * Initialize civicrm here
  */
@@ -21,7 +21,7 @@ function apachesolr_civiAttachments_initialize() {
 function apachesolr_civiAttachments_menu() {
   $items = array();
   $items['admin/config/search/apachesolr/civiAttachments'] = array(
-    'title' => 'Attachments',
+    'title' => 'CiviAttachments',
     'description' => 'Administer Apache Solr Attachments.',
     'page callback' => 'apachesolr_civiAttachments_admin_page',
     'access arguments' => array('administer search'),
@@ -252,7 +252,7 @@ function apachesolr_civiAttachments_is_file($filepath) {
     return FALSE;
   }
   elseif (!is_file($filepath)) {
-    watchdog('Apache Solr Attachments', '%filepath is not a valid file path', array('%filepath' => $entity->uri), WATCHDOG_WARNING);
+    watchdog('Apache Solr Attachments', '%filepath is not a valid file path', array('%filepath' => $filepath), WATCHDOG_WARNING);
     return FALSE;
   }
   return TRUE;
