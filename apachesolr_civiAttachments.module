@@ -181,7 +181,9 @@ function apachesolr_civiAttachments_solr_reindex() {
 /**
  * Fetches all files linked to nodes created by fields from the file module
  * regardless of the widget
+ *
  * @return type
+ * @see _apachesolr_civiAttachments_get_file
  */
 function _apachesolr_civiAttachments_get_all_files() {
   apachesolr_civiAttachments_initialize();
@@ -192,6 +194,26 @@ FROM       civicrm_file f
 INNER JOIN civicrm_entity_file ef ON f.id = ef.file_id
 ";
   return CRM_Core_DAO::executeQuery($sql);
+}
+
+/**
+ * Fetch entity-file references linked to given file
+ *
+ * @return CRM_Core_DAO
+ * @see _apachesolr_civiAttachments_get_all_files
+ */
+function _apachesolr_civiAttachments_get_file($fileId) {
+  apachesolr_civiAttachments_initialize();
+
+  $sql = "
+SELECT     f.*, ef.*, ef.id as entity_file_id
+FROM       civicrm_file f
+INNER JOIN civicrm_entity_file ef ON f.id = ef.file_id
+WHERE      f.id = %1
+";
+  return CRM_Core_DAO::executeQuery($sql, array(
+    1 => array($fileId, 'Integer')
+  ));
 }
 
 /**
@@ -287,4 +309,24 @@ function apachesolr_civiAttachments_file_result($doc, &$result, &$extra) {
 function apachesolr_civiAttachments_default_excluded() {
   $default = array('aif', 'art', 'avi', 'bmp', 'gif', 'ico', 'jpg', 'mov', 'mp3', 'mp4', 'mpg', 'oga', 'ogv', 'png', 'psd', 'ra', 'ram', 'rgb', 'tif', 'wmv');
   return $default;
+}
+
+/**
+ * Implementation of hook_civicrm_postSave
+ *
+ * Listen for new/newly-linked files and enqueue updates to Solr.
+ *
+ * @param CRM_Core_DAO $dao
+ */
+function apachesolr_civiAttachments_civicrm_postSave_civicrm_entity_file(&$dao) {
+  if ($dao instanceof CRM_Core_DAO_EntityFile) {
+    module_load_include('inc', 'apachesolr_civiAttachments', 'apachesolr_civiAttachments.index');
+
+    /** @var $fileDAO CRM_Core_DAO_EntityFile */
+    $fileDAO = _apachesolr_civiAttachments_get_file($dao->file_id);
+    while ($fileDAO->fetch()) {
+      list ($parent_entity_type, $parent_entity_id) = _apachesolr_civiAttachments_get_parent_info($fileDAO);
+      apachesolr_civiAttachments_add_file_usage($fileDAO, $parent_entity_type, $parent_entity_id);
+    }
+  }
 }
