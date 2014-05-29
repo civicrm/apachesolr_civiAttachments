@@ -139,6 +139,7 @@ WHERE      f.id = %1
   $document->created = strtotime($dao->upload_date);
   $document->bundle = 'civiFile';
   $document->bundle_name = 'civiFile';
+  $document->ss_filemime = $dao->mime_type;
 
   $env_id = apachesolr_default_environment();
   $document->content = apachesolr_clean_text($text);
@@ -298,6 +299,94 @@ function apachesolr_civiAttachments_file_result($doc, &$result, &$extra) {
     'file' => $doc,
     'uid' => $doc->is_uid,
   );
+}
+
+
+/**
+ * Implements hook_theme().
+ */
+function apachesolr_civiAttachments_theme() {
+  return array(
+    'apachesolr_search_snippets__civiFile' => array(
+      'variables' => array('doc' => NULL, 'snippets' => array()),
+    ),
+  );
+}
+
+/**
+ * Preprocess function for theme_apachesolr_search_snippets__file().
+ */
+function apachesolr_civiAttachments_preprocess_apachesolr_search_snippets__civiFile(&$vars) {
+  // Call the standard preprocess function for search snippets so that
+  // $vars['flattened_snippets'] will be defined.
+  // @todo This assumes apachesolr_search.module is enabled, but it's not
+  //likely this theme function will ever be called if it isn't.
+  apachesolr_search_preprocess_apachesolr_search_snippets($vars);
+}
+
+
+/**
+ * @todo Vastly improve this theming function
+ * @param type $vars
+ * @return type
+ */
+function theme_apachesolr_search_snippets__civiFile($vars) {
+  $doc = $vars['doc'];
+  $snippets = $vars['flattened_snippets'];
+  $parent_entity_links = array();
+
+  // Retrieve our parent entities.
+  $parents = array(); // eg $parents['civicrm_contact'][123] = 1;
+  $dao = _apachesolr_civiAttachments_get_file($doc->entity_id);
+  while ($dao->fetch()) {
+    if ($dao->entity_table == 'civicrm_note') {
+      // For notes, we go up an extra level to the note's parent
+      $note = new CRM_Core_DAO_Note();
+      $note->id = $dao->entity_id;
+      $note->find();
+      while ($note->fetch()) {
+        $parents[$note->entity_table][$note->entity_id] = 1;
+      }
+    }
+    else {
+      $parents[$dao->entity_table][$dao->entity_id] = 1;
+    }
+  }
+
+  foreach ($parents as $entity_table => $items) {
+    foreach ($items as $entity_id => $nonce) {
+      $link = CRM_Utils_System::createDefaultCrudLink(array(
+        'action' => CRM_Core_Action::VIEW,
+        'entity_table' => $entity_table,
+        'entity_id' => $entity_id,
+      ));
+      if ($link) {
+        $parent_entity_links [] = l($link['title'], $link['url']);
+      }
+      else {
+        $parent_entity_links [] = t('[@entity_table, @entity_id]', array(
+          '@entity_table' => $entity_table,
+          '@entity_id' => $entity_id,
+        ));
+      }
+    }
+  }
+
+  if (module_exists('file')) {
+    $file_type = t('!icon @filemime', array(
+      '@filemime' => $doc->ss_filemime,
+      '!icon' => theme('file_icon', array('file' => (object) array('filemime' => $doc->ss_filemime)))
+    ));
+  }
+  else {
+    $file_type = t('@filemime', array('@filemime' => $doc->ss_filemime));
+  }
+
+  $attached_msg = t('@file_type <em>attached to:</em> !parents', array(
+    '@file_type' => $file_type,
+    '!parents' => implode(', ', $parent_entity_links),
+  ));
+  return implode(' ... ', $snippets) . '<span>(' . $attached_msg . ')</span>';
 }
 
 /**
