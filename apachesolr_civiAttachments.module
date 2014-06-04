@@ -5,7 +5,7 @@
  * Provides a file attachment search implementation for use with the Apache Solr module
  */
 
-define('EXTRACTING_SERVLET', 'extract/tika');
+define('APACHESOLR_CIVIATTACHMENTS_EXTRACTING_SERVLET', 'extract/tika');
 /**
  * Initialize civicrm here
  */
@@ -21,7 +21,7 @@ function apachesolr_civiAttachments_initialize() {
 function apachesolr_civiAttachments_menu() {
   $items = array();
   $items['admin/config/search/apachesolr/civiAttachments'] = array(
-    'title' => 'Attachments',
+    'title' => 'CiviAttachments',
     'description' => 'Administer Apache Solr Attachments.',
     'page callback' => 'apachesolr_civiAttachments_admin_page',
     'access arguments' => array('administer search'),
@@ -139,6 +139,7 @@ WHERE      f.id = %1
   $document->created = strtotime($dao->upload_date);
   $document->bundle = 'civiFile';
   $document->bundle_name = 'civiFile';
+  $document->ss_filemime = $dao->mime_type;
 
   $env_id = apachesolr_default_environment();
   $document->content = apachesolr_clean_text($text);
@@ -181,7 +182,9 @@ function apachesolr_civiAttachments_solr_reindex() {
 /**
  * Fetches all files linked to nodes created by fields from the file module
  * regardless of the widget
+ *
  * @return type
+ * @see _apachesolr_civiAttachments_get_file
  */
 function _apachesolr_civiAttachments_get_all_files() {
   apachesolr_civiAttachments_initialize();
@@ -192,6 +195,26 @@ FROM       civicrm_file f
 INNER JOIN civicrm_entity_file ef ON f.id = ef.file_id
 ";
   return CRM_Core_DAO::executeQuery($sql);
+}
+
+/**
+ * Fetch entity-file references linked to given file
+ *
+ * @return CRM_Core_DAO
+ * @see _apachesolr_civiAttachments_get_all_files
+ */
+function _apachesolr_civiAttachments_get_file($fileId) {
+  apachesolr_civiAttachments_initialize();
+
+  $sql = "
+SELECT     f.*, ef.*, ef.id as entity_file_id
+FROM       civicrm_file f
+INNER JOIN civicrm_entity_file ef ON f.id = ef.file_id
+WHERE      f.id = %1
+";
+  return CRM_Core_DAO::executeQuery($sql, array(
+    1 => array($fileId, 'Integer')
+  ));
 }
 
 /**
@@ -252,7 +275,7 @@ function apachesolr_civiAttachments_is_file($filepath) {
     return FALSE;
   }
   elseif (!is_file($filepath)) {
-    watchdog('Apache Solr Attachments', '%filepath is not a valid file path', array('%filepath' => $entity->uri), WATCHDOG_WARNING);
+    watchdog('Apache Solr Attachments', '%filepath is not a valid file path', array('%filepath' => $filepath), WATCHDOG_WARNING);
     return FALSE;
   }
   return TRUE;
@@ -278,6 +301,94 @@ function apachesolr_civiAttachments_file_result($doc, &$result, &$extra) {
   );
 }
 
+
+/**
+ * Implements hook_theme().
+ */
+function apachesolr_civiAttachments_theme() {
+  return array(
+    'apachesolr_search_snippets__civiFile' => array(
+      'variables' => array('doc' => NULL, 'snippets' => array()),
+    ),
+  );
+}
+
+/**
+ * Preprocess function for theme_apachesolr_search_snippets__file().
+ */
+function apachesolr_civiAttachments_preprocess_apachesolr_search_snippets__civiFile(&$vars) {
+  // Call the standard preprocess function for search snippets so that
+  // $vars['flattened_snippets'] will be defined.
+  // @todo This assumes apachesolr_search.module is enabled, but it's not
+  //likely this theme function will ever be called if it isn't.
+  apachesolr_search_preprocess_apachesolr_search_snippets($vars);
+}
+
+
+/**
+ * @todo Vastly improve this theming function
+ * @param type $vars
+ * @return type
+ */
+function theme_apachesolr_search_snippets__civiFile($vars) {
+  $doc = $vars['doc'];
+  $snippets = $vars['flattened_snippets'];
+  $parent_entity_links = array();
+
+  // Retrieve our parent entities.
+  $parents = array(); // eg $parents['civicrm_contact'][123] = 1;
+  $dao = _apachesolr_civiAttachments_get_file($doc->entity_id);
+  while ($dao->fetch()) {
+    if ($dao->entity_table == 'civicrm_note') {
+      // For notes, we go up an extra level to the note's parent
+      $note = new CRM_Core_DAO_Note();
+      $note->id = $dao->entity_id;
+      $note->find();
+      while ($note->fetch()) {
+        $parents[$note->entity_table][$note->entity_id] = 1;
+      }
+    }
+    else {
+      $parents[$dao->entity_table][$dao->entity_id] = 1;
+    }
+  }
+
+  foreach ($parents as $entity_table => $items) {
+    foreach ($items as $entity_id => $nonce) {
+      $link = CRM_Utils_System::createDefaultCrudLink(array(
+        'action' => CRM_Core_Action::VIEW,
+        'entity_table' => $entity_table,
+        'entity_id' => $entity_id,
+      ));
+      if ($link) {
+        $parent_entity_links [] = l($link['title'], $link['url']);
+      }
+      else {
+        $parent_entity_links [] = t('[@entity_table, @entity_id]', array(
+          '@entity_table' => $entity_table,
+          '@entity_id' => $entity_id,
+        ));
+      }
+    }
+  }
+
+  if (module_exists('file')) {
+    $file_type = t('!icon @filemime', array(
+      '@filemime' => $doc->ss_filemime,
+      '!icon' => theme('file_icon', array('file' => (object) array('filemime' => $doc->ss_filemime)))
+    ));
+  }
+  else {
+    $file_type = t('@filemime', array('@filemime' => $doc->ss_filemime));
+  }
+
+  $attached_msg = t('@file_type <em>attached to:</em> !parents', array(
+    '@file_type' => $file_type,
+    '!parents' => implode(', ', $parent_entity_links),
+  ));
+  return implode(' ... ', $snippets) . '<span>(' . $attached_msg . ')</span>';
+}
+
 /**
  * Provides a default list of filename extensions to exclude from the index.
  *
@@ -287,4 +398,24 @@ function apachesolr_civiAttachments_file_result($doc, &$result, &$extra) {
 function apachesolr_civiAttachments_default_excluded() {
   $default = array('aif', 'art', 'avi', 'bmp', 'gif', 'ico', 'jpg', 'mov', 'mp3', 'mp4', 'mpg', 'oga', 'ogv', 'png', 'psd', 'ra', 'ram', 'rgb', 'tif', 'wmv');
   return $default;
+}
+
+/**
+ * Implementation of hook_civicrm_postSave
+ *
+ * Listen for new/newly-linked files and enqueue updates to Solr.
+ *
+ * @param CRM_Core_DAO $dao
+ */
+function apachesolr_civiAttachments_civicrm_postSave_civicrm_entity_file(&$dao) {
+  if ($dao instanceof CRM_Core_DAO_EntityFile) {
+    module_load_include('inc', 'apachesolr_civiAttachments', 'apachesolr_civiAttachments.index');
+
+    /** @var $fileDAO CRM_Core_DAO_EntityFile */
+    $fileDAO = _apachesolr_civiAttachments_get_file($dao->file_id);
+    while ($fileDAO->fetch()) {
+      list ($parent_entity_type, $parent_entity_id) = _apachesolr_civiAttachments_get_parent_info($fileDAO);
+      apachesolr_civiAttachments_add_file_usage($fileDAO, $parent_entity_type, $parent_entity_id);
+    }
+  }
 }

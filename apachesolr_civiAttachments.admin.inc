@@ -246,7 +246,7 @@ function apachesolr_civiAttachments_test_tika_extraction() {
     drupal_set_message(t('Text can not be succesfully extracted. Please check your settings'), 'error');
   }
   // Delete our test file from indexing table
-  db_delete($indexer_table)->condition('entity_id', $file->fid)->execute();
+  db_delete($indexer_table)->condition('entity_id', $file->file_id)->execute();
 
   drupal_goto('admin/config/search/apachesolr/civiAttachments');
 }

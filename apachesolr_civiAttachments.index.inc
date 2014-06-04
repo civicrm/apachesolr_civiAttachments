@@ -167,7 +167,7 @@ function apachesolr_civiAttachments_extract_using_solr($filepath) {
     'headers' => $headers,
     'data' => $data,
   );
-  $response = $solr->makeServletRequest(EXTRACTING_SERVLET, $params, $options);
+  $response = $solr->makeServletRequest(APACHESOLR_CIVIATTACHMENTS_EXTRACTING_SERVLET, $params, $options);
   return array($response->extracted, $response->extracted_metadata);
 }
 
