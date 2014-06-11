@@ -141,11 +141,74 @@ WHERE      f.id = %1
   $document->bundle_name = 'civiFile';
   $document->ss_filemime = $dao->mime_type;
 
+  $document->ss_civicrm_parent_table = $dao->entity_table;
+  $document->ss_civicrm_parent_id = $dao->entity_id;
+
+  $xparent = _apachesolr_civiAttachments_dereference_file_parent($dao);
+  if ($xparent) {
+    $document->ss_civicrm_xparent_table = $xparent['entity_table'];
+    $document->ss_civicrm_xparent_id = $xparent['entity_id'];
+  }
+
   $env_id = apachesolr_default_environment();
   $document->content = apachesolr_clean_text($text);
 
   $documents[] = $document;
   return $documents;
+}
+
+/**
+ * Given a file-attachment, determine if it's attached directly to a business-object ("Contact", "Activity", etc)
+ * or attached indirectly to a business-object (via civicrm_note or a custom-value). Return the identity of the
+ * business-object.
+ *
+ * @param CRM_Core_DAO $dao
+ * @return array|NULL the business-object to which the file is attached. keys:
+ *   - entity_table: string
+ *   - entity_id: int
+ */
+function _apachesolr_civiAttachments_dereference_file_parent($dao) {
+  if ($dao->entity_table == 'civicrm_note') {
+    $note = new CRM_Core_DAO_Note();
+    $note->id = $dao->entity_id;
+    $note->find();
+    if ($note->fetch()) {
+      return array(
+        'entity_table' => $note->entity_table,
+        'entity_id' => $note->entity_id,
+      );
+    }
+  }
+  elseif (preg_match('/^civicrm_value_/', $dao->entity_table)) {
+    $extends = CRM_Core_DAO::getFieldValue('CRM_Core_DAO_CustomGroup', $dao->entity_table, 'extends', 'table_name');
+    $extends_table_name = $extends ? CRM_Core_BAO_CustomGroup::getTableNameByEntityName($extends) : NULL;
+
+    // Counter-intuitively, in civicrm_entity_file the "entity_table" references the custom-data table while the
+    // "entity_id" references the parent table. This would seem ambiguous for multi-value custom-data, but
+    // it likely works out because the relation is stored twice (once in civicrm_entity_file and once in
+    // the custom-data table), and the other relation (from custom-data table to civicrm_file) is more-accurate
+    // and more-used.
+    $entity_id = $dao->entity_id;
+    //$entity_id = CRM_Core_DAO::singleValueQuery("SELECT entity_id FROM {$dao->entity_table} WHERE id = %1", array(
+    //  1 => array($dao->entity_id, 'Integer')
+    //));
+
+    if ($entity_id && $extends_table_name) {
+      return array(
+        'entity_table' => $extends_table_name,
+        'entity_id' => $entity_id,
+      );
+    }
+  }
+  else {
+    return array(
+      'entity_table' => $dao->entity_table,
+      'entity_id' => $dao->entity_id,
+    );
+  }
+
+  // Attached to non-existent or unrecognized record
+  return NULL;
 }
 
 /**
@@ -400,6 +463,10 @@ function apachesolr_civiAttachments_default_excluded() {
   return $default;
 }
 
+function apachesolr_civiattachments_civicrm_post() {
+  dpm(func_get_args());
+}
+
 /**
  * Implementation of hook_civicrm_postSave
  *
@@ -418,4 +485,14 @@ function apachesolr_civiAttachments_civicrm_postSave_civicrm_entity_file(&$dao) 
       apachesolr_civiAttachments_add_file_usage($fileDAO, $parent_entity_type, $parent_entity_id);
     }
   }
+}
+
+/**
+ * Implementation of hook_civicrm_fileSearches
+ *
+ * @param array<CRM_Core_FileSearchInterface> $fileSearches
+ */
+function apachesolr_civiAttachments_civicrm_fileSearches(&$fileSearches) {
+  require_once __DIR__ . '/DrupalSolrCiviAttachmentSearch.php';
+  $fileSearches[] = new DrupalSolrCiviAttachmentSearch();
 }
