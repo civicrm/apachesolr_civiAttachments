@@ -5,7 +5,7 @@ This module has been copied over and adapted for CiviCRM from Apache Solr Attach
 
 ## Installation
 
-Here's a stab quick, dirty, and thoroughly-untested guide:
+Here's a quick, dirty, and thoroughly-untested guide:
 
 1. Install *AMP, Drupal and CiviCRM (4.5+) as usual. (I used civicrm-buildkit, but use whatever process you like.)
 2. Install Java
