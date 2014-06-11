@@ -1,5 +1,4 @@
-
-CiviCRM Solr Attachments for 7.x
+## CiviCRM Attachment Indexing with Solr and Drupal 7.x
 
 This module has been copied over and adapted for CiviCRM from [Drupal's apachesolr_attachments](https://drupal.org/project/apachesolr_attachments).
 
