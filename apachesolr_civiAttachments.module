@@ -463,10 +463,6 @@ function apachesolr_civiAttachments_default_excluded() {
   return $default;
 }
 
-function apachesolr_civiattachments_civicrm_post() {
-  dpm(func_get_args());
-}
-
 /**
  * Implementation of hook_civicrm_postSave
  *
