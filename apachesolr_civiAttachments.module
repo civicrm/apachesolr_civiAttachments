@@ -418,11 +418,11 @@ function theme_apachesolr_search_snippets__civiFile($vars) {
 
   foreach ($parents as $entity_table => $items) {
     foreach ($items as $entity_id => $nonce) {
-      $link = CRM_Utils_System::createDefaultCrudLink(array(
+      $link = CRM_Utils_System::createDefaultCrudLink([
         'action' => CRM_Core_Action::VIEW,
         'entity_table' => $entity_table,
         'entity_id' => $entity_id,
-      ));
+      ], TRUE);
       if ($link) {
         $parent_entity_links [] = l($link['title'], $link['url']);
       }
